@@ -20,10 +20,9 @@ void printMatrix(double *matrix, const int *SIZE) {
     printf("\n");
 }
 
-double diagonalMultiplication(const double *matrix, const int *SIZE) {
-    double rez = 1;
-    for (int i = *SIZE; i >= 1; --i) rez *= matrix[(*SIZE + 1) * (*SIZE - i)];
-    return rez;
+__device__ void diagonalMultiplication(double *rez, const double *matrix, const int *SIZE) {
+    *rez = 1;
+    for (int i = *SIZE; i >= 1; --i) *rez *= matrix[(*SIZE + 1) * (*SIZE - i)];
 }
 
 int zeroesCheck(const double *range, const int n, const int *SIZE) {
@@ -60,37 +59,24 @@ int sort(double *matrix, const int *SIZE) {
     return power(-1, count);
 }
 
-double gaussianDeterminant(double *matrix, int *SIZE) {
+__global__ void gaussianDeterminant(double *rez, double *matrix, int *SIZE) {
     int size = *SIZE;
     double first, factor;
-    double *dMatrix;
-    cudaError_t cudaStatus;
-    cudaStatus = cudaMalloc((void **) &dMatrix, *SIZE * *SIZE * sizeof(double));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        exit(-3);
-    }
-    cudaStatus = cudaMemcpy(dMatrix, matrix, *SIZE * *SIZE * sizeof(double), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy1 failed!");
-        exit(-3);
-    }
+    __syncthreads();
     while (size > 1) {
-        if (matrix[(*SIZE + 1) * (*SIZE - size)] == 0) return 0;
+        if (matrix[(*SIZE + 1) * (*SIZE - size)] == 0) goto exit;
         first = matrix[(*SIZE + 1) * (*SIZE - size)];
         for (int i = (*SIZE + 1) * (*SIZE - size) + *SIZE; i < *SIZE * *SIZE; i += *SIZE) {
             factor = matrix[i] / first;
-            subKernel<<<1, size>>>(dMatrix, factor, i, (*SIZE + 1) * (*SIZE - size));
-            cudaStatus = cudaMemcpy(matrix, dMatrix, *SIZE * *SIZE * sizeof(double), cudaMemcpyDeviceToHost);
-            if (cudaStatus != cudaSuccess) {
-                fprintf(stderr, "cudaMemcpy2 failed!");
-                exit(-3);
-            }
+            subKernel<<<1, size>>>(matrix, factor, i, (*SIZE + 1) * (*SIZE - size));
+            cudaDeviceSynchronize();
         }
         size--;
     }
-    cudaFree(dMatrix);
-    return diagonalMultiplication(matrix, SIZE);
+    diagonalMultiplication(rez, matrix, SIZE);
+    //printf("%f\n", *rez);
+    __syncthreads();
+    exit:;
 }
 
 void init() {
@@ -104,10 +90,17 @@ void init() {
         exit(-1);
     }
     double *matrix;
+    double *dMatrix;
     double determinant;
+    double *dRez;
+    cudaMalloc((void **) &dRez, sizeof(double));
+    int *dSIZE;
+    cudaMalloc((void **) &dSIZE, sizeof(int));
     int SIZE, sign;
+    cudaError_t cudaStatus;
     clock_t time_start, time_finish;
     while (fscanf(fp1, "%d", &SIZE) == 1) {
+        cudaMalloc((void **) &dMatrix, SIZE * SIZE * sizeof(double));
         matrix = (double *) malloc(SIZE * SIZE * sizeof(double));
         if (!matrix)exit(-3);
         for (int i = 0; i < SIZE * SIZE; ++i) {
@@ -115,11 +108,28 @@ void init() {
         }
         time_start = clock();
         sign = sort(matrix, &SIZE);
-        determinant = gaussianDeterminant(matrix, &SIZE) * (double) sign;
+        cudaStatus = cudaMemcpy(dMatrix, matrix, SIZE * SIZE * sizeof(double), cudaMemcpyHostToDevice);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMemcpy failed: \n");
+            exit(-3);
+        }
+        cudaStatus = cudaMemcpy(dSIZE, &SIZE, sizeof(int), cudaMemcpyHostToDevice);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMemcpy failed: \n");
+            exit(-4);
+        }
+        gaussianDeterminant<<<1, 1>>>(dRez, dMatrix, dSIZE);
+        cudaStatus = cudaMemcpy(&determinant, dRez, sizeof(double), cudaMemcpyDeviceToHost);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMemcpy failed\n");
+            exit(-5);
+        }
+        determinant *= (double) sign;
         time_finish = clock();
         fprintf(fp2, "%ld %f\n", time_finish - time_start, determinant);
         if (determinant > DBL_MAX) exit(-2);
         free(matrix);
+        cudaFree(dMatrix);
     }
     fclose(fp1);
     fclose(fp2);
