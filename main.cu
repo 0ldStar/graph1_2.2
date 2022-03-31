@@ -6,28 +6,45 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-
-__global__ void subKernel(double *range, const double factor, int firstInd, int secondInd) {
-    unsigned int i = threadIdx.x;
-    range[firstInd + i] -= range[secondInd + i] * factor;
-}
-
-void printMatrix(double *matrix, const int *SIZE) {
-    for (int i = 0; i < *SIZE * *SIZE; ++i) {
-        if (i % *SIZE == 0)printf("\n");
-        printf("%f ", matrix[i]);
+__global__ void subKernel(double *range, double first, unsigned curSize, unsigned size, int k/*, double *firstElArr*/) {
+    unsigned thrX = threadIdx.x;
+    unsigned blX = blockIdx.x;
+    unsigned ind = blX * size + thrX;
+    unsigned i = (ind / curSize * size + size - 1 - ind % curSize + k * size); // reverse
+    double factor = range[(i / size) * size + k - 1] / first;
+    if (i < size * size) {
+        range[i] -= range[(k - 1) * size + i % size] * factor;
     }
-    printf("\n");
 }
 
-__device__ void diagonalMultiplication(double *rez, const double *matrix, const int *SIZE) {
+//__global__ void subKernel(double *range, double first, unsigned size, int k) {
+//    unsigned thrX = threadIdx.x;
+//    unsigned blX = blockIdx.x;
+//    unsigned ind = blX * size + thrX;
+//    unsigned i = (ind / size * size + size - 1 - ind % size + k * size); // reverse
+//    double factor = range[(i / size) * size + k - 1] / first;
+//    if (i < size * size) {
+//        range[i] -= range[(k - 1) * size + i % size] * factor;
+//    }
+//}
+
+//__global__  void subKernel(double *range, double first, unsigned curStr, unsigned size) {
+//    unsigned thrX = threadIdx.x;
+//    unsigned blX = blockDim.x;
+//    unsigned i = blX * size + thrX + size;
+//    double factor = range[curStr * size + curStr] / first;
+//    if (i < size * size)
+//        range[i] -= range[(curStr - 1) * size + (curStr - 1) + i % size] * factor;
+//}
+
+__device__ void diagonalMultiplication(double *rez, const double *matrix, const unsigned *SIZE) {
     *rez = 1;
-    for (int i = *SIZE; i >= 1; --i) *rez *= matrix[(*SIZE + 1) * (*SIZE - i)];
+    for (unsigned i = *SIZE; i >= 1; --i) *rez *= matrix[(*SIZE + 1) * (*SIZE - i)];
 }
 
-int zeroesCheck(const double *range, const int n, const int *SIZE) {
+int zeroesCheck(const double *range, const unsigned n, const unsigned *SIZE) {
     int count = 0, flag = 1;
-    for (int i = n; i < *SIZE; ++i)
+    for (unsigned i = n; i < *SIZE; ++i)
         if (range[i] == 0 && flag) {
             count++;
         } else flag = 0;
@@ -40,18 +57,18 @@ int power(const int a, int b) {
     return rez;
 }
 
-void swap(double *range, int n, const int *SIZE) {
+void swap(double *range, unsigned n, const unsigned *SIZE) {
     double tmp;
-    for (int i = n; i < n + *SIZE; ++i) {
+    for (unsigned i = n; i < n + *SIZE; ++i) {
         tmp = range[i];
         range[i] = range[i + *SIZE];
         range[i + *SIZE] = tmp;
     }
 }
 
-int sort(double *matrix, const int *SIZE) {
+int sort(double *matrix, const unsigned *SIZE) {
     int count = 0;
-    for (int i = 0; i < (*SIZE - 1) * *SIZE; i += *SIZE)
+    for (unsigned i = 0; i < (*SIZE - 1) * *SIZE; i += *SIZE)
         if (zeroesCheck(matrix, i, SIZE) > zeroesCheck(matrix, i + *SIZE, SIZE)) {
             count++;
             swap(matrix, i, SIZE);
@@ -59,24 +76,51 @@ int sort(double *matrix, const int *SIZE) {
     return power(-1, count);
 }
 
-__global__ void gaussianDeterminant(double *rez, double *matrix, int *SIZE) {
-    int size = *SIZE;
-    double first, factor;
-    __syncthreads();
+__global__ void gaussianDeterminant(double *rez, double *matrix, unsigned *SIZE) {
+    unsigned size = *SIZE;
+    int flag = 1;
+    int k = 1;
     while (size > 1) {
-        if (matrix[(*SIZE + 1) * (*SIZE - size)] == 0) goto exit;
-        first = matrix[(*SIZE + 1) * (*SIZE - size)];
-        for (int i = (*SIZE + 1) * (*SIZE - size) + *SIZE; i < *SIZE * *SIZE; i += *SIZE) {
-            factor = matrix[i] / first;
-            subKernel<<<1, size>>>(matrix, factor, i, (*SIZE + 1) * (*SIZE - size));
-            cudaDeviceSynchronize();
+        unsigned threadX;
+        unsigned blockX;
+        if (size * size - size > 1024) {
+            threadX = 1024;
+            blockX = (size * size - size) / 1024;
+        } else {
+            threadX = (size * size - size) % 1024;
+            blockX = 1;
         }
+        dim3 threads = {threadX, 1, 1};
+        dim3 blocks = {blockX, 1, 1};
+        if (matrix[(size + 1) * (k - 1) + k - 1] == 0) {
+            flag = 0;
+            break;
+        }
+//        double first = matrix[(*SIZE + 1) * (*SIZE - size)];
+//        double first = matrix[(size + 1) * (k - 1) + k - 1];
+        double first = matrix[(*SIZE + 1) * (k - 1)];
+        subKernel<<<blocks, threads>>>(matrix, first, size, *SIZE, k);
+        cudaDeviceSynchronize();
         size--;
+        k++;
     }
-    diagonalMultiplication(rez, matrix, SIZE);
-    //printf("%f\n", *rez);
-    __syncthreads();
-    exit:;
+    if (flag)
+        diagonalMultiplication(rez, matrix, SIZE);
+    else *rez = 0;
+}
+
+void printMatrix(double *matrix, const unsigned *SIZE) {
+    for (int i = 0; i < *SIZE * *SIZE; ++i) {
+        if (i % *SIZE == 0)printf("\n");
+        printf("%f ", matrix[i]);
+    }
+    printf("\n");
+}
+
+void zeroes(double *matrix, const unsigned *SIZE) {
+    for (int i = 0; i < *SIZE * *SIZE; ++i) {
+        matrix[i] = 0;
+    }
 }
 
 void init() {
@@ -90,13 +134,12 @@ void init() {
         exit(-1);
     }
     double *matrix;
-    double *dMatrix;
     double determinant;
-    double *dRez;
+    double *dMatrix, *dRez;
     cudaMalloc((void **) &dRez, sizeof(double));
-    int *dSIZE;
-    cudaMalloc((void **) &dSIZE, sizeof(int));
-    int SIZE, sign;
+    unsigned *dSIZE;
+    cudaMalloc((void **) &dSIZE, sizeof(unsigned));
+    unsigned SIZE, sign;
     cudaError_t cudaStatus;
     clock_t time_start, time_finish;
     while (fscanf(fp1, "%d", &SIZE) == 1) {
@@ -110,27 +153,44 @@ void init() {
         sign = sort(matrix, &SIZE);
         cudaStatus = cudaMemcpy(dMatrix, matrix, SIZE * SIZE * sizeof(double), cudaMemcpyHostToDevice);
         if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "cudaMemcpy failed: \n");
+            fprintf(stderr, "cudaMemcpy failed1: \n");
             exit(-3);
         }
-        cudaStatus = cudaMemcpy(dSIZE, &SIZE, sizeof(int), cudaMemcpyHostToDevice);
+//        printf("Memcpy1 %ld \n", clock() - time_start);
+        cudaStatus = cudaMemcpy(dSIZE, &SIZE, sizeof(unsigned), cudaMemcpyHostToDevice);
         if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "cudaMemcpy failed: \n");
+            fprintf(stderr, "cudaMemcpy failed2: \n");
             exit(-4);
         }
+//        printf("Memcpy2 %ld \n", clock() - time_start);
         gaussianDeterminant<<<1, 1>>>(dRez, dMatrix, dSIZE);
+        cudaDeviceSynchronize();
+//        printf("Determinant %ld \n", clock() - time_start);
         cudaStatus = cudaMemcpy(&determinant, dRez, sizeof(double), cudaMemcpyDeviceToHost);
         if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "cudaMemcpy failed\n");
+            fprintf(stderr, "cudaMemcpy failed3\n");
             exit(-5);
         }
+        zeroes(matrix, &SIZE);
+        cudaStatus = cudaMemcpy(matrix, dMatrix, SIZE * SIZE * sizeof(double), cudaMemcpyDeviceToHost);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMemcpy failed3\n");
+            exit(-5);
+        }
+//        printf("Memcpy3 %ld \n", clock() - time_start);
         determinant *= (double) sign;
         time_finish = clock();
         fprintf(fp2, "%ld %f\n", time_finish - time_start, determinant);
-        if (determinant > DBL_MAX) exit(-2);
+        printf("\t %d\n", SIZE);
+//        if (SIZE == 5) break;
+//        if (determinant > DBL_MAX) {
+//            perror("Determinant over\n");
+//            exit(-2); }
         free(matrix);
         cudaFree(dMatrix);
-    }
+    }    //printf("%f\n", *rez);
+    cudaFree(dRez);
+    cudaFree(dSIZE);
     fclose(fp1);
     fclose(fp2);
 }
