@@ -17,26 +17,6 @@ __global__ void subKernel(double *range, double first, unsigned curSize, unsigne
     }
 }
 
-//__global__ void subKernel(double *range, double first, unsigned size, int k) {
-//    unsigned thrX = threadIdx.x;
-//    unsigned blX = blockIdx.x;
-//    unsigned ind = blX * size + thrX;
-//    unsigned i = (ind / size * size + size - 1 - ind % size + k * size); // reverse
-//    double factor = range[(i / size) * size + k - 1] / first;
-//    if (i < size * size) {
-//        range[i] -= range[(k - 1) * size + i % size] * factor;
-//    }
-//}
-
-//__global__  void subKernel(double *range, double first, unsigned curStr, unsigned size) {
-//    unsigned thrX = threadIdx.x;
-//    unsigned blX = blockDim.x;
-//    unsigned i = blX * size + thrX + size;
-//    double factor = range[curStr * size + curStr] / first;
-//    if (i < size * size)
-//        range[i] -= range[(curStr - 1) * size + (curStr - 1) + i % size] * factor;
-//}
-
 __device__ void diagonalMultiplication(double *rez, const double *matrix, const unsigned *SIZE) {
     *rez = 1;
     for (unsigned i = *SIZE; i >= 1; --i) *rez *= matrix[(*SIZE + 1) * (*SIZE - i)];
@@ -92,12 +72,10 @@ __global__ void gaussianDeterminant(double *rez, double *matrix, unsigned *SIZE)
         }
         dim3 threads = {threadX, 1, 1};
         dim3 blocks = {blockX, 1, 1};
-        if (matrix[(size + 1) * (k - 1) + k - 1] == 0) {
+        if (matrix[(*SIZE + 1) * (*SIZE - size)] == 0) {
             flag = 0;
             break;
         }
-//        double first = matrix[(*SIZE + 1) * (*SIZE - size)];
-//        double first = matrix[(size + 1) * (k - 1) + k - 1];
         double first = matrix[(*SIZE + 1) * (k - 1)];
         subKernel<<<blocks, threads>>>(matrix, first, size, *SIZE, k);
         cudaDeviceSynchronize();
@@ -143,13 +121,13 @@ void init() {
     cudaError_t cudaStatus;
     clock_t time_start, time_finish;
     while (fscanf(fp1, "%d", &SIZE) == 1) {
+        time_start = clock();
         cudaMalloc((void **) &dMatrix, SIZE * SIZE * sizeof(double));
         matrix = (double *) malloc(SIZE * SIZE * sizeof(double));
         if (!matrix)exit(-3);
         for (int i = 0; i < SIZE * SIZE; ++i) {
             fscanf(fp1, "%lf", &matrix[i]);
         }
-        time_start = clock();
         sign = sort(matrix, &SIZE);
         cudaStatus = cudaMemcpy(dMatrix, matrix, SIZE * SIZE * sizeof(double), cudaMemcpyHostToDevice);
         if (cudaStatus != cudaSuccess) {
