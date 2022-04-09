@@ -65,9 +65,9 @@ __global__ void gaussianDeterminant(double *rez, double *matrix, unsigned *SIZE)
         unsigned blockX;
         if (size * size - size > 1024) {
             threadX = 1024;
-            blockX = (size * size - size) / 1024;
+            blockX = 1 + (size * size - size) / 1024;
         } else {
-            threadX = (size * size - size) % 1024;
+            threadX = size * size - size;
             blockX = 1;
         }
         dim3 threads = {threadX, 1, 1};
