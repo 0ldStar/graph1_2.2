@@ -6,7 +6,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-__global__ void subKernel(double *range, double first, unsigned curSize, unsigned size, int k/*, double *firstElArr*/) {
+__global__ void subKernel(double *range, double first, unsigned curSize, unsigned size, int k) {
     unsigned thrX = threadIdx.x;
     unsigned blX = blockIdx.x;
     unsigned ind = blX * size + thrX;
